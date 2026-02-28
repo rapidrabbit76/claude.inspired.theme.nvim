@@ -25,6 +25,10 @@ done_skip() {
   printf "${DIM}skipped${RESET}\n"
 }
 
+done_exists() {
+  printf "${DIM}already set${RESET}\n"
+}
+
 warn() {
   printf "${YELLOW}  ⚠ %s${RESET}\n" "$1"
 }
@@ -75,11 +79,22 @@ step "Detecting plugin manager"
 INIT_LUA="$HOME/.config/nvim/init.lua"
 LAZY_DIR="$HOME/.local/share/nvim/lazy"
 LAZY_LOCK="$HOME/.config/nvim/lazy-lock.json"
+PLUGINS_DIR="$HOME/.config/nvim/lua/plugins"
+SPEC_FILE="$PLUGINS_DIR/claude-theme.lua"
+COLORSCHEME_FILE="$PLUGINS_DIR/colorscheme.lua"
 
 USING_LAZY=0
+USING_LAZYVIM=0
+
 if [ -d "$LAZY_DIR" ] || [ -f "$LAZY_LOCK" ]; then
   USING_LAZY=1
-  printf "${BLUE}lazy.nvim${RESET}\n"
+  # Detect LazyVim (has LazyVim in lazy dir or referenced in colorscheme.lua)
+  if [ -d "$LAZY_DIR/LazyVim" ] || grep -q "LazyVim" "$COLORSCHEME_FILE" 2>/dev/null; then
+    USING_LAZYVIM=1
+    printf "${BLUE}LazyVim${RESET}\n"
+  else
+    printf "${BLUE}lazy.nvim${RESET}\n"
+  fi
 else
   printf "${DIM}none (native pack)${RESET}\n"
 fi
@@ -87,29 +102,76 @@ fi
 # ── Configure ─────────────────────────────────────────────────────────────────
 
 if [ "$USING_LAZY" = "1" ]; then
-  step "Configuring for lazy.nvim"
-  done_skip
-  printf "\n"
-  warn "Do NOT use vim.cmd.colorscheme() — lazy.nvim will override it."
-  printf "\n"
-  printf "${DIM}  │ Create ${RESET}${BOLD}~/.config/nvim/lua/plugins/claude-theme.lua${RESET}${DIM}:${RESET}\n"
-  printf "\n"
-  code_block 'return {'
-  code_block '  "rapidrabbit76/claude.inspired.theme.nvim",'
-  code_block '  lazy = false,'
-  code_block '  priority = 1000,'
-  code_block '  config = function(_, opts)'
-  code_block '    require("claude").setup(opts)'
-  code_block '    require("claude").load()'
-  code_block '    require("claude").register_commands()'
-  code_block '  end,'
-  code_block '  opts = { style = "medium" },'
-  code_block '}'
-  printf "\n"
-  info "For LazyVim, also add:"
-  code_block '{ "LazyVim/LazyVim", opts = { colorscheme = "claude" } }'
-  printf "\n"
+
+  # Step 1: Create plugin spec file
+  step "Creating plugin spec"
+
+  if [ -f "$SPEC_FILE" ]; then
+    if grep -q "claude" "$SPEC_FILE" 2>/dev/null; then
+      done_exists
+    else
+      # File exists but not for claude — don't overwrite
+      done_skip
+      warn "claude-theme.lua exists but has different content — skipping"
+    fi
+  else
+    mkdir -p "$PLUGINS_DIR"
+    cat > "$SPEC_FILE" << 'SPEC'
+return {
+  "rapidrabbit76/claude.inspired.theme.nvim",
+  lazy = false,
+  priority = 1000,
+  config = function(_, opts)
+    require("claude").setup(opts)
+    require("claude").load()
+    require("claude").register_commands()
+  end,
+  opts = {
+    set_background = "dark",
+    style = "medium", -- "soft" | "medium" | "hard"
+    transparent = false,
+  },
+}
+SPEC
+    done_ok
+    info "created $SPEC_FILE"
+  fi
+
+  # Step 2: Set LazyVim colorscheme (if LazyVim detected)
+  if [ "$USING_LAZYVIM" = "1" ]; then
+    step "Setting LazyVim colorscheme"
+
+    if [ -f "$COLORSCHEME_FILE" ]; then
+      if grep -q 'colorscheme.*=.*"claude"' "$COLORSCHEME_FILE" 2>/dev/null; then
+        done_exists
+      else
+        # Replace existing colorscheme value with "claude"
+        sed -i.bak 's/colorscheme *= *"[^"]*"/colorscheme = "claude"/' "$COLORSCHEME_FILE"
+        rm -f "${COLORSCHEME_FILE}.bak"
+        done_ok
+        info "updated $COLORSCHEME_FILE"
+      fi
+    else
+      # No colorscheme.lua — create one
+      mkdir -p "$PLUGINS_DIR"
+      cat > "$COLORSCHEME_FILE" << 'CSPEC'
+return {
+  {
+    "LazyVim/LazyVim",
+    opts = {
+      colorscheme = "claude",
+    },
+  },
+}
+CSPEC
+      done_ok
+      info "created $COLORSCHEME_FILE"
+    fi
+  fi
+
 else
+  # ── Native pack (no lazy.nvim) ────────────────────────────────────────────
+
   ALREADY_CONFIGURED=0
   if [ -f "$INIT_LUA" ]; then
     if grep -qE "colorscheme.*claude|claude\.load|claude\.setup" "$INIT_LUA" 2>/dev/null; then
@@ -117,19 +179,17 @@ else
     fi
   fi
 
+  step "Configuring init.lua"
+
   if [ "$ALREADY_CONFIGURED" = "1" ]; then
-    step "Configuring init.lua"
-    printf "${DIM}already set${RESET}\n"
+    done_exists
   elif [ -f "$INIT_LUA" ]; then
-    step "Configuring init.lua"
     printf '\n-- claude colorscheme\nvim.cmd.colorscheme("claude")\n' >> "$INIT_LUA"
     done_ok
   else
-    step "Configuring init.lua"
     done_skip
     info "Add to ~/.config/nvim/init.lua:"
     code_block 'vim.cmd.colorscheme("claude")'
-    printf "\n"
   fi
 fi
 
